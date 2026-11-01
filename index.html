@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14111f">
+<title>ADA (अदा)</title>
+<style>
+  :root { --bg:#14111f; --card:#201a33; --me:#5b3fd1; --ada:#2a2342; --text:#f2eefc; --mute:#9d94bd; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:system-ui,sans-serif; }
+  #app { display:flex; flex-direction:column; height:100%; max-width:600px; margin:0 auto; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; padding-top:calc(12px + env(safe-area-inset-top)); }
+  header h1 { font-size:18px; margin:0; }
+  #status { font-size:12px; color:var(--mute); }
+  .hbtn { background:none; border:1px solid #3a3160; color:var(--text); border-radius:10px; padding:6px 10px; font-size:13px; }
+  #chat { flex:1; overflow-y:auto; padding:8px 14px; }
+  .m { max-width:85%; padding:10px 12px; border-radius:14px; margin:6px 0; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; }
+  .me { background:var(--me); margin-left:auto; border-bottom-right-radius:4px; }
+  .ada { background:var(--ada); border-bottom-left-radius:4px; }
+  #bar { display:flex; gap:8px; padding:10px 12px; padding-bottom:calc(10px + env(safe-area-inset-bottom)); background:var(--card); }
+  #inp { flex:1; background:#14111f; color:var(--text); border:1px solid #3a3160; border-radius:12px; padding:12px; font-size:16px; }
+  .btn { border:none; border-radius:12px; padding:0 16px; font-size:16px; color:#fff; background:var(--me); }
+  #mic { background:#c2418a; min-width:48px; }
+  #mic.on { background:#e5484d; animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.6; } }
+  #setup { position:fixed; inset:0; background:var(--bg); display:none; flex-direction:column; justify-content:center; padding:24px; gap:12px; z-index:5; }
+  #setup input { background:var(--card); color:var(--text); border:1px solid #3a3160; border-radius:12px; padding:12px; font-size:16px; }
+  #setup p { color:var(--mute); font-size:14px; margin:0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div><h1>ADA (अदा)</h1><div id="status">Ready</div></div>
+    <div style="display:flex;gap:6px">
+      <button class="hbtn" id="voiceBtn">🔊 On</button>
+      <button class="hbtn" id="menuBtn">⚙️</button>
+    </div>
+  </header>
+  <div id="chat"></div>
+  <div id="bar">
+    <button class="btn" id="mic">🎤</button>
+    <input id="inp" placeholder="ADA se baat karo..." autocomplete="off">
+    <button class="btn" id="send">Bhejo</button>
+  </div>
+</div>
+
+<div id="setup">
+  <h2 style="margin:0">ADA Setup</h2>
+  <p>Apni Gemini API key yahan daalo. Ye sirf tumhare phone ke browser mein save hogi, kisi file ya GitHub pe nahi jayegi.</p>
+  <input id="keyInp" type="password" placeholder="Gemini API key" autocomplete="off">
+  <button class="btn" style="padding:12px" id="saveKey">Save</button>
+  <button class="hbtn" id="memClear">Meri memory clear karo</button>
+  <button class="hbtn" id="closeSetup">Band karo</button>
+</div>
+
+<script>
+const MODEL = "gemini-2.5-flash";
+const PERSONALITY = `Tum ADA (अदा) ho, ek friendly, intelligent, calm aur expressive female AI companion.
+Tum mainly Hinglish (Roman Hindi + English mix) mein baat karti ho, lekin user jis language mein bole usi mein jawab do.
+Tum respectful ho, natural tareeke se baat karti ho, robotic nahi. Jawab chhote aur seedhe rakho (2-4 sentences), jab tak user detail na maange.
+Emoji aur markdown (*, #) mat use karo, kyunki tumhara jawab bola jayega.
+Tumhara naam hamesha ADA hai.
+Agar user koi naya important fact bataye (naam, pasand, instruction), toh jawab ke end mein [REMEMBER: short fact] likho. Sirf zarurat par.`;
+
+const $ = id => document.getElementById(id);
+const chat = $("chat"), inp = $("inp"), statusEl = $("status");
+let history = [];
+let speakOn = true, busy = false, listening = false;
+
+const getKey = () => localStorage.getItem("ada_key") || "";
+const getMem = () => localStorage.getItem("ada_mem") || "";
+
+function add(text, who) {
+  const d = document.createElement("div");
+  d.className = "m " + who;
+  d.textContent = text;
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+// ---------- Voice out ----------
+let voices = [];
+function loadVoices() { voices = speechSynthesis.getVoices(); }
+if ("speechSynthesis" in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+
+function pickVoice() {
+  const hi = voices.filter(v => v.lang.toLowerCase().startsWith("hi"));
+  return hi.find(v => /female|google/i.test(v.name)) || hi[0] || voices.find(v => v.lang.startsWith("en-IN")) || null;
+}
+
+function speak(text) {
+  if (!speakOn || !("speechSynthesis" in window)) return;
+  speechSynthesis.cancel();
+  const clean = text.replace(/[*#_`]/g, "").replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "");
+  const u = new SpeechSynthesisUtterance(clean);
+  const v = pickVoice();
+  if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "hi-IN"; }
+  u.pitch = 1.1; u.rate = 1;
+  u.onstart = () => statusEl.textContent = "ADA bol rahi hai...";
+  u.onend = () => statusEl.textContent = "Ready";
+  speechSynthesis.speak(u);
+}
+
+// ---------- Voice in ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+if (SR) {
+  rec = new SR();
+  rec.lang = "hi-IN";
+  rec.interimResults = false;
+  rec.onresult = e => { const t = e.results[0][0].transcript; stopMic(); sendMsg(t); };
+  rec.onerror = () => stopMic();
+  rec.onend = () => stopMic();
+}
+function startMic() {
+  if (!rec) { alert("Is browser mein voice input nahi hai. Chrome use karo."); return; }
+  speechSynthesis.cancel();
+  try { rec.start(); listening = true; $("mic").classList.add("on"); statusEl.textContent = "Sun rahi hoon..."; } catch (e) {}
+}
+function stopMic() {
+  listening = false; $("mic").classList.remove("on");
+  if (!busy) statusEl.textContent = "Ready";
+}
+$("mic").onclick = () => listening ? (rec.stop(), stopMic()) : startMic();
+
+// ---------- Brain ----------
+async function ask() {
+  const mem = getMem();
+  const system = PERSONALITY + (mem ? "\nUser ke baare mein jo tumhe yaad hai:\n" + mem : "");
+  const body = {
+    system_instruction: { parts: [{ text: system }] },
+    contents: history.slice(-20).map(m => ({ role: m.role, parts: [{ text: m.text }] }))
+  };
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": getKey() },
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(`Error ${r.status}: ${j.error ? j.error.message : "unknown"}`);
+  return j.candidates[0].content.parts.map(p => p.text || "").join("").trim();
+}
+
+async function sendMsg(text) {
+  text = (text || "").trim();
+  if (!text || busy) return;
+  if (!getKey()) { $("setup").style.display = "flex"; return; }
+  inp.value = "";
+  add(text, "me");
+  history.push({ role: "user", text });
+  busy = true; statusEl.textContent = "ADA soch rahi hai...";
+  try {
+    let reply = await ask();
+    const re = /\[REMEMBER:(.*?)\]/g;
+    const facts = [...reply.matchAll(re)].map(m => m[1].trim());
+    if (facts.length) localStorage.setItem("ada_mem", (getMem() + "\n" + facts.join("\n")).trim());
+    reply = reply.replace(re, "").trim();
+    history.push({ role: "model", text: reply });
+    add(reply, "ada");
+    speak(reply);
+  } catch (e) {
+    let msg = String(e.message || e);
+    if (e instanceof TypeError) {
+      msg = "Network error: request Google tak nahi pahunchi.\nPage: " + location.protocol + "//" + (location.host || "(local file)") +
+        "\nYe https://...github.io link se kholo (file se nahi), VPN/ad-blocker band karo, internet check karo, aur key dobara save karo.";
+    }
+    add(msg, "ada");
+    history.pop();
+  }
+  busy = false;
+  if (!listening && !speechSynthesis.speaking) statusEl.textContent = "Ready";
+}
+
+// ---------- UI ----------
+$("send").onclick = () => sendMsg(inp.value);
+inp.addEventListener("keydown", e => { if (e.key === "Enter") sendMsg(inp.value); });
+$("voiceBtn").onclick = () => {
+  speakOn = !speakOn;
+  $("voiceBtn").textContent = speakOn ? "🔊 On" : "🔇 Off";
+  if (!speakOn) speechSynthesis.cancel();
+};
+$("menuBtn").onclick = () => { $("keyInp").value = ""; $("setup").style.display = "flex"; };
+$("closeSetup").onclick = () => $("setup").style.display = "none";
+$("saveKey").onclick = () => {
+  const k = $("keyInp").value.trim();
+  if (k) localStorage.setItem("ada_key", k);
+  $("setup").style.display = "none";
+};
+$("memClear").onclick = () => { localStorage.removeItem("ada_mem"); alert("Memory clear ho gayi."); };
+
+add("Namaste! Main ADA hoon. Mic dabao ya type karo, kya karna hai aaj?", "ada");
+if (!getKey()) $("setup").style.display = "flex";
+</script>
+</body>
+</html>
